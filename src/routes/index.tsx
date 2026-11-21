@@ -53,7 +53,7 @@ function HomePage() {
             Bảng giá
           </Link>
           <Button asChild size="sm">
-            <Link to="/pricing">Bắt đầu <ArrowRight aria-hidden="true" /></Link>
+            <Link to="/auth">Bắt đầu <ArrowRight aria-hidden="true" /></Link>
           </Button>
         </nav>
       </header>

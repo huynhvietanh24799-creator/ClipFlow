@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Copy, Loader2, Scissors } from "lucide-react";
 import { toast } from "sonner";
 
@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { buildFfmpegCommands, formatTimestamp, type Highlight } from "@/lib/highlight/highlight";
+import { supabase } from "@/integrations/supabase/client";
 import { generateHighlights } from "@/lib/highlight/highlight.functions";
 
 export const Route = createFileRoute("/highlight")({
@@ -24,12 +25,27 @@ export const Route = createFileRoute("/highlight")({
 });
 
 function HighlightPage() {
+  const navigate = useNavigate();
+  const [checking, setChecking] = useState(true);
+  const [trialUsed, setTrialUsed] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [videoPath, setVideoPath] = useState("video-goc.mp4");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (!data.session) void navigate({ to: "/auth" });
+      else setChecking(false);
+    });
+  }, [navigate]);
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    await navigate({ to: "/auth" });
+  }
 
   async function run() {
     setLoading(true);
@@ -41,6 +57,7 @@ function HighlightPage() {
         setWarnings(res.warnings);
       } else {
         setError(res.error);
+        if (res.trialUsed) setTrialUsed(true);
       }
     } catch {
       setError("Transcript quá ngắn hoặc có lỗi. Dán ít nhất vài dòng có mốc [MM:SS].");
@@ -60,11 +77,24 @@ function HighlightPage() {
 
   const commands = highlights.length ? buildFfmpegCommands(videoPath || "video-goc.mp4", highlights) : [];
 
+  if (checking) {
+    return (
+      <main className="mx-auto max-w-4xl px-4 py-10 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin" />
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto max-w-4xl px-4 py-10">
-      <Link to="/" className="mb-6 inline-flex items-center gap-2 text-sm text-muted-foreground">
-        <ArrowLeft className="h-4 w-4" /> Về trang chủ
-      </Link>
+      <div className="mb-6 flex items-center justify-between">
+        <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+          <ArrowLeft className="h-4 w-4" /> Về trang chủ
+        </Link>
+        <Button variant="ghost" size="sm" onClick={signOut}>
+          Đăng xuất
+        </Button>
+      </div>
       <h1 className="flex items-center gap-2 text-3xl font-semibold">
         <Scissors className="h-7 w-7" /> Cắt Highlight
       </h1>
@@ -78,12 +108,18 @@ function HighlightPage() {
         onChange={(e) => setTranscript(e.target.value)}
         placeholder={"[00:05] Hôm nay mình kể một chuyện...\n[00:12] ..."}
       />
-      <Button className="mt-4" onClick={run} disabled={loading || transcript.trim().length < 50}>
+      <Button className="mt-4" onClick={run} disabled={loading || trialUsed || transcript.trim().length < 50}>
         {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
         {loading ? "Đang phân tích..." : "Chọn 10 đoạn Highlight"}
       </Button>
 
+      <p className="mt-3 text-sm text-muted-foreground">Bạn được dùng thử miễn phí 1 lần.</p>
       {error ? <p className="mt-4 text-destructive">{error}</p> : null}
+      {trialUsed ? (
+        <Button asChild className="mt-3">
+          <Link to="/pricing">Xem bảng giá</Link>
+        </Button>
+      ) : null}
       {warnings.length ? (
         <ul className="mt-4 list-disc pl-5 text-sm text-amber-600">
           {warnings.map((w) => (
