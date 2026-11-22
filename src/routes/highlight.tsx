@@ -14,8 +14,11 @@ import {
   isHttpUrl,
   isPlatformLink,
   parseTimestamp,
+  validateHighlights,
   type Highlight,
 } from "@/lib/highlight/highlight";
+import { parseSegments, rankHighlights } from "@/lib/highlight/local-ranker";
+import type { WhisperLanguage } from "@/lib/highlight/whisper-client";
 import type { AspectRatio } from "@/lib/highlight/clip-tools";
 import { generateHighlights, transcribeChunk } from "@/lib/highlight/highlight.functions";
 
@@ -41,6 +44,17 @@ type Clip = { url: string; name: string };
 const RATIOS: { value: AspectRatio; label: string; css?: string }[] = [
   { value: "16:9", label: "16:9 ngang (YouTube)", css: "16 / 9" },
   { value: "9:16", label: "9:16 dọc (TikTok, Reels)", css: "9 / 16" },
+];
+
+const MODES = [
+  { value: "free", label: "Miễn phí, chạy trên máy bạn" },
+  { value: "ai", label: "AI nâng cao (dùng thử 1 lần)" },
+] as const;
+
+const LANGUAGES: { value: string; label: string; code: WhisperLanguage }[] = [
+  { value: "vi", label: "Tiếng Việt", code: "vietnamese" },
+  { value: "en", label: "Tiếng Anh", code: "english" },
+  { value: "auto", label: "Tự nhận diện", code: null },
 ];
 
 const DURATION_PRESETS = [
@@ -78,6 +92,9 @@ function HighlightPage() {
   const [count, setCount] = useState(5);
   const [presetIdx, setPresetIdx] = useState(1);
   const [ratio, setRatio] = useState<AspectRatio>("16:9");
+  const [mode, setMode] = useState<"free" | "ai">("free");
+  const [language, setLanguage] = useState("vi");
+  const [followFace, setFollowFace] = useState(true);
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
@@ -211,8 +228,20 @@ function HighlightPage() {
   }
 
   async function pickHighlights(text: string, durationSec: number | undefined) {
-    setStatus("AI đang chọn đoạn Highlight...");
     const { minSec, maxSec } = DURATION_PRESETS[presetIdx]!;
+    if (mode === "free") {
+      setStatus("Đang chấm điểm và chọn đoạn Highlight...");
+      const list = rankHighlights(parseSegments(text, durationSec), count, { minSec, maxSec });
+      if (list.length === 0) {
+        setError("Không tìm được đoạn nào đủ độ dài. Thử chọn độ dài khác hoặc video có nhiều lời nói hơn.");
+        return false;
+      }
+      setHighlights(list);
+      setWarnings(validateHighlights(list, durationSec, list.length, { minSec, maxSec }));
+      setSelected(new Set(list.map((_, i) => i)));
+      return true;
+    }
+    setStatus("AI đang chọn đoạn Highlight...");
     const res = await generateHighlights({ data: { transcript: text, count, durationSec, minSec, maxSec } });
     if (!res.ok) {
       setError(res.error);
@@ -241,19 +270,36 @@ function HighlightPage() {
       inputPath.current = path;
 
       const parts: string[] = [];
-      let failed: string | null = null;
-      await tools.forEachAudioChunk(path, dur, CHUNK_SEC, async (b64, offset, i, total) => {
-        if (failed) return;
-        setStatus(`Đang gỡ băng lời nói: đoạn ${i + 1}/${total}...`);
-        const r = await transcribeChunk({ data: { audioBase64: b64, offsetSec: offset } });
-        if (!r.ok) {
-          failed = r.error;
-          if (r.trialUsed) setTrialUsed(true);
-          return;
+      if (mode === "free") {
+        const { createWhisper } = await import("@/lib/highlight/whisper-client");
+        const whisper = createWhisper((text) => setStatus(text));
+        try {
+          setStatus("Đang tải mô hình gỡ băng (lần đầu khoảng 1 phút, các lần sau nhanh hơn)...");
+          await whisper.ready;
+          const code = LANGUAGES.find((l) => l.value === language)?.code ?? null;
+          await tools.forEachRawAudioChunk(path, dur, CHUNK_SEC, async (audio, offset, i, total) => {
+            setStatus(`Đang gỡ băng lời nói trên máy bạn: đoạn ${i + 1}/${total}...`);
+            const text = await whisper.transcribe(audio, offset, code);
+            if (text) parts.push(text);
+          });
+        } finally {
+          whisper.terminate();
         }
-        if (r.text) parts.push(r.text);
-      });
-      if (failed) throw new Error(failed);
+      } else {
+        let failed: string | null = null;
+        await tools.forEachAudioChunk(path, dur, CHUNK_SEC, async (b64, offset, i, total) => {
+          if (failed) return;
+          setStatus(`Đang gỡ băng lời nói: đoạn ${i + 1}/${total}...`);
+          const r = await transcribeChunk({ data: { audioBase64: b64, offsetSec: offset } });
+          if (!r.ok) {
+            failed = r.error;
+            if (r.trialUsed) setTrialUsed(true);
+            return;
+          }
+          if (r.text) parts.push(r.text);
+        });
+        if (failed) throw new Error(failed);
+      }
 
       const full = parts.join("\n");
       if (full.length < 50) throw new Error("Không nghe thấy đủ lời nói trong video để chọn Highlight.");
@@ -292,8 +338,23 @@ function HighlightPage() {
         const label = `Đang cắt video ${n + 1}/${order.length}`;
         setStatus(`${label}...`);
         if (next[i]) continue;
-        const blob = await tools.cutClip(inputPath.current, h.startSec, h.endSec, ratio, (f) =>
-          setStatus(`${label} (${Math.round(f * 100)}%)...`),
+        let faceX: number | null = null;
+        if (ratio === "9:16" && followFace) {
+          try {
+            setStatus(`${label}: đang tìm khuôn mặt...`);
+            const { findFaceCenterX } = await import("@/lib/highlight/face-crop");
+            faceX = await findFaceCenterX(file, h.startSec, h.endSec);
+          } catch {
+            faceX = null; // không nhận diện được thì cắt giữa khung
+          }
+        }
+        const blob = await tools.cutClip(
+          inputPath.current,
+          h.startSec,
+          h.endSec,
+          ratio,
+          (f) => setStatus(`${label} (${Math.round(f * 100)}%)...`),
+          faceX,
         );
         next[i] = { url: URL.createObjectURL(blob), name: `highlight-${String(i + 1).padStart(2, "0")}.mp4` };
         setClips({ ...next });
@@ -387,7 +448,7 @@ function HighlightPage() {
       </h1>
       <p className="mt-2 text-muted-foreground">
         Chọn video dài, ClipFlow tự nghe, chọn đoạn hay nhất và cắt thành video ngắn. Video được cắt ngay trên máy bạn,
-        không tải lên máy chủ. Chỉ âm thanh được gửi đi để gỡ băng.
+        không tải lên máy chủ. Chế độ miễn phí xử lý trọn vẹn trên máy bạn; chế độ AI nâng cao chỉ gửi âm thanh đi để gỡ băng.
       </p>
 
       <Card className="mt-6 grid gap-4 p-5">
@@ -441,6 +502,47 @@ function HighlightPage() {
           </details>
         </div>
         <div>
+          <span className="mb-2 block text-sm font-medium">Cách chọn đoạn Highlight</span>
+          <div className="flex flex-wrap gap-2">
+            {MODES.map((m) => (
+              <Button
+                key={m.value}
+                type="button"
+                size="sm"
+                variant={m.value === mode ? "default" : "outline"}
+                disabled={busy}
+                onClick={() => setMode(m.value)}
+              >
+                {m.label}
+              </Button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {mode === "free"
+              ? "Gỡ băng bằng Whisper và chấm điểm ngay trên máy bạn: không tốn phí, không giới hạn lượt, video và âm thanh không gửi đi đâu. Máy mạnh (có WebGPU) chạy nhanh hơn, độ chính xác tiếng Việt thấp hơn AI nâng cao."
+              : "AI chọn đoạn chính xác hơn nhưng chỉ dùng thử 1 lần mỗi tài khoản. Âm thanh được gửi tới máy chủ AI để gỡ băng."}
+          </p>
+        </div>
+        {mode === "free" ? (
+          <div>
+            <span className="mb-2 block text-sm font-medium">Ngôn ngữ trong video</span>
+            <div className="flex flex-wrap gap-2">
+              {LANGUAGES.map((l) => (
+                <Button
+                  key={l.value}
+                  type="button"
+                  size="sm"
+                  variant={l.value === language ? "default" : "outline"}
+                  disabled={busy}
+                  onClick={() => setLanguage(l.value)}
+                >
+                  {l.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <div>
           <label className="mb-2 block text-sm font-medium" htmlFor="count">
             Số video Highlight muốn cắt (1–10)
           </label>
@@ -488,16 +590,22 @@ function HighlightPage() {
               </Button>
             ))}
           </div>
+          {ratio === "9:16" ? (
+            <label className="mt-2 flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={followFace} disabled={busy} onChange={(e) => setFollowFace(e.target.checked)} />
+              Cắt dọc bám theo khuôn mặt người nói (không thấy mặt thì cắt giữa khung)
+            </label>
+          ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
-            Video được nén lại theo tỉ lệ đã chọn nên cắt mất khoảng vài phút cho mỗi video. Khung hình được cắt giữa.
+            Video được nén lại theo tỉ lệ đã chọn nên cắt mất khoảng vài phút cho mỗi video.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={analyzeVideo} disabled={!file || busy || trialUsed}>
+          <Button onClick={analyzeVideo} disabled={!file || busy || (mode === "ai" && trialUsed)}>
             {busy && status ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
             Phân tích video
           </Button>
-          <span className="text-sm text-muted-foreground">Bạn được dùng thử miễn phí 1 lần.</span>
+          {mode === "ai" ? <span className="text-sm text-muted-foreground">Bạn được dùng thử miễn phí 1 lần.</span> : null}
         </div>
         {status ? <p className="text-sm">{status}</p> : null}
       </Card>
@@ -514,14 +622,14 @@ function HighlightPage() {
           className="mt-3"
           variant="outline"
           onClick={analyzeTranscript}
-          disabled={busy || trialUsed || transcript.trim().length < 50}
+          disabled={busy || (mode === "ai" && trialUsed) || transcript.trim().length < 50}
         >
           Chọn Highlight từ transcript
         </Button>
       </details>
 
       {error ? <p className="mt-4 text-destructive">{error}</p> : null}
-      {trialUsed ? (
+      {mode === "ai" && trialUsed ? (
         <Button asChild className="mt-3">
           <Link to="/pricing">Xem bảng giá</Link>
         </Button>

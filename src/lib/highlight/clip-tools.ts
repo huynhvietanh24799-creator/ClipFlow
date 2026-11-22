@@ -71,6 +71,26 @@ async function run(ffmpeg: FFmpeg, args: string[]) {
   if (code !== 0) throw new Error("FFmpeg báo lỗi khi xử lý video.");
 }
 
+/** Tách âm thanh thô (số thực 16kHz mono) từng đoạn `chunkSec` giây cho bộ gỡ băng chạy trên trình duyệt. */
+export async function forEachRawAudioChunk(
+  inputPath: string,
+  durationSec: number,
+  chunkSec: number,
+  onChunk: (audio: Float32Array, offsetSec: number, index: number, total: number) => Promise<void>,
+) {
+  const ffmpeg = await getFfmpeg();
+  const total = Math.ceil(durationSec / chunkSec);
+  for (let i = 0; i < total; i++) {
+    const offset = i * chunkSec;
+    const out = `raw-${i}.f32`;
+    await run(ffmpeg, ["-ss", String(offset), "-t", String(chunkSec), "-i", inputPath, "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", out]);
+    const data = (await ffmpeg.readFile(out)) as Uint8Array;
+    await ffmpeg.deleteFile(out);
+    const copy = new Uint8Array(data); // bản sao riêng để chuyển sang worker
+    await onChunk(new Float32Array(copy.buffer, 0, Math.floor(copy.byteLength / 4)), offset, i, total);
+  }
+}
+
 /** Tách âm thanh từng đoạn `chunkSec` giây (mono, mp3 nhỏ) và đưa cho `onChunk` lần lượt. */
 export async function forEachAudioChunk(
   inputPath: string,
@@ -96,10 +116,12 @@ export async function forEachAudioChunk(
 export type AspectRatio = "original" | "16:9" | "9:16";
 
 // Cắt giữa khung theo tỉ lệ rồi đưa về cỡ chuẩn (đã là số chẵn).
-const RATIO_FILTER: Record<Exclude<AspectRatio, "original">, string> = {
-  "16:9": "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)',scale=1280:720,setsar=1",
-  "9:16": "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',scale=720:1280,setsar=1",
-};
+function ratioFilter(ratio: Exclude<AspectRatio, "original">, faceX: number | null): string {
+  if (ratio === "16:9") return "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)',scale=1280:720,setsar=1";
+  // Cắt dọc: giữa khung, hoặc bám theo khuôn mặt (faceX từ 0 đến 1) nếu tìm thấy.
+  const centre = faceX === null ? "iw/2" : `iw*${Math.min(1, Math.max(0, faceX)).toFixed(4)}`;
+  return `crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':'min(max(${centre}-out_w/2,0),iw-out_w)':0,scale=720:1280,setsar=1`;
+}
 
 /**
  * Cắt 1 clip. Giữ khung gốc: sao chép luồng (rất nhanh, điểm bắt đầu có thể lệch vài giây).
@@ -111,6 +133,7 @@ export async function cutClip(
   endSec: number,
   ratio: AspectRatio = "original",
   onProgress?: (fraction: number) => void,
+  faceX: number | null = null,
 ): Promise<Blob> {
   const ffmpeg = await getFfmpeg();
   const out = `clip-${Math.round(startSec)}.mp4`;
@@ -119,7 +142,7 @@ export async function cutClip(
     ratio === "original"
       ? ["-c", "copy", "-avoid_negative_ts", "make_zero"]
       : [
-          "-vf", RATIO_FILTER[ratio],
+          "-vf", ratioFilter(ratio, faceX),
           "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
           "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
         ];

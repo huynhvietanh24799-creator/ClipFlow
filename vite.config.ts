@@ -16,8 +16,18 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
+    // Dùng bản onnxruntime-web không nhúng tệp wasm (~27MB, vượt giới hạn tệp tĩnh của hosting);
+    // wasm được tải từ CDN khi chạy (xem whisper.worker.ts).
+    resolve: {
+      alias: [
+        {
+          find: /^onnxruntime-web\/webgpu$/,
+          replacement: new URL("./node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs", import.meta.url).pathname,
+        },
+      ],
+    },
     // ffmpeg.wasm tự tạo worker riêng, không để Vite đóng gói sẵn.
-    optimizeDeps: { exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util"] },
+    optimizeDeps: { exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util", "@huggingface/transformers", "onnxruntime-web"] },
     worker: { format: "es" },
   },
 });
