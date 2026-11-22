@@ -112,6 +112,10 @@ function translate(msg: string): string {
   if (m.includes("invalid login")) return "Email hoặc mật khẩu chưa đúng.";
   if (m.includes("already registered")) return "Email này đã đăng ký. Hãy đăng nhập.";
   if (m.includes("email not confirmed")) return "Bạn chưa xác nhận email. Mở email và bấm liên kết.";
+  if (m.includes("rate limit") || m.includes("too many")) {
+    return "Hệ thống gửi email quá nhiều lần trong thời gian ngắn. Chờ khoảng 1 giờ rồi thử lại, hoặc dùng email khác.";
+  }
   if (m.includes("password")) return "Mật khẩu chưa hợp lệ (ít nhất 8 ký tự).";
-  return "Có lỗi xảy ra, thử lại.";
+  if (m.includes("email") && m.includes("invalid")) return "Địa chỉ email chưa hợp lệ. Kiểm tra lại chính tả.";
+  return `Có lỗi xảy ra: ${msg}`;
 }
