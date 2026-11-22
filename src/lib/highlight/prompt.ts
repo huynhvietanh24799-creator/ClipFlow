@@ -8,9 +8,10 @@ export const HIGHLIGHT_COUNT = 10;
 export const MIN_SECONDS = 30;
 export const MAX_SECONDS = 90;
 
-export const SYSTEM_PROMPT = `Bạn là Chuyên gia Biên tập Video ngắn (Short-form Video Strategist), chuyên chuyển video dài (Podcast, YouTube, Livestream) thành video Highlight cho TikTok, Reels, YouTube Shorts.
+export function buildSystemPrompt(count: number): string {
+  return `Bạn là Chuyên gia Biên tập Video ngắn (Short-form Video Strategist), chuyên chuyển video dài (Podcast, YouTube, Livestream) thành video Highlight cho TikTok, Reels, YouTube Shorts.
 
-Nhiệm vụ: từ transcript có mốc thời gian, chọn ĐÚNG ${HIGHLIGHT_COUNT} đoạn Highlight đắt giá nhất.
+Nhiệm vụ: từ transcript có mốc thời gian, chọn ĐÚNG ${count} đoạn Highlight đắt giá nhất.
 
 Mỗi đoạn phải đủ 4 tiêu chí:
 1. Thời lượng ${MIN_SECONDS}-60 giây (tối đa ${MAX_SECONDS} giây nếu câu chuyện cực cuốn).
@@ -26,7 +27,13 @@ Quy tắc:
 
 Định dạng JSON:
 {"highlights":[{"title":"tiêu đề giật tít","startSec":0,"endSec":0,"viralScore":1-10,"viralReason":"lý do ngắn","hook":"câu mở đầu nguyên văn","summary":"1-2 câu","editTips":"gợi ý dựng: B-roll, chữ nhấn, nhịp cắt","caption":"1-2 dòng","hashtags":["#a","#b","#c"]}]}`;
-
-export function buildUserPrompt(transcript: string): string {
-  return `Transcript (mỗi dòng có dạng [MM:SS] nội dung):\n\n${transcript}\n\nChọn đúng ${HIGHLIGHT_COUNT} đoạn Highlight. startSec/endSec tính bằng giây.`;
 }
+
+export function buildUserPrompt(transcript: string, count: number): string {
+  return `Transcript (mỗi dòng có dạng [MM:SS] nội dung):\n\n${transcript}\n\nChọn đúng ${count} đoạn Highlight. startSec/endSec tính bằng giây.`;
+}
+
+export const TRANSCRIBE_PROMPT =
+  "Gỡ băng (chép lại lời nói) đoạn âm thanh này bằng đúng ngôn ngữ người nói. " +
+  "Mỗi câu một dòng, dạng [MM:SS] nội dung, mốc tính từ đầu đoạn âm thanh. " +
+  "Chỉ trả về transcript, không giải thích. Nếu không có lời nói, trả về dòng trống.";

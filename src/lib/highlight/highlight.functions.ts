@@ -2,80 +2,92 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { parseHighlightResponse, validateHighlights, type Highlight } from "./highlight";
-import { SYSTEM_PROMPT, buildUserPrompt } from "./prompt";
-
-const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
-const DEFAULT_MODEL = "google/gemini-2.5-flash";
+import { offsetTranscript, parseHighlightResponse, pickTop, validateHighlights, type Highlight } from "./highlight";
+import { TRANSCRIBE_PROMPT, buildSystemPrompt, buildUserPrompt } from "./prompt";
 
 export type HighlightResult =
   | { ok: true; highlights: Highlight[]; warnings: string[] }
   | { ok: false; error: string; trialUsed?: boolean };
 
+export type TranscribeResult = { ok: true; text: string } | { ok: false; error: string; trialUsed?: boolean };
+
+const TRIAL_USED_MESSAGE = "Bạn đã dùng thử 1 lần. Hãy chọn gói để tiếp tục.";
+
 /**
- * Chạy ở phía server (khóa AI không bao giờ xuống trình duyệt).
- * Phải đăng nhập. Mỗi tài khoản dùng thử 1 lần: dấu "trial_used" lưu trong
- * app_metadata của người dùng (chỉ máy chủ sửa được, người dùng không tự sửa).
+ * Gỡ băng 1 đoạn âm thanh ngắn (do trình duyệt tách ra từ video của khách).
+ * Chỉ cho người đã đăng nhập và chưa dùng hết lượt thử. Chưa tính lượt: lượt tính khi chọn Highlight.
+ */
+export const transcribeChunk = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator(
+    z.object({
+      audioBase64: z.string().min(100).max(6_000_000),
+      offsetSec: z.number().nonnegative().max(86_400),
+    }),
+  )
+  .handler(async ({ data, context }): Promise<TranscribeResult> => {
+    const { gatewayChat, readTrial } = await import("./highlight.server");
+    const trial = await readTrial(context.userId);
+    if (!trial.ok) return { ok: false, error: "Không đọc được tài khoản. Thử đăng nhập lại." };
+    if (trial.used) return { ok: false, trialUsed: true, error: TRIAL_USED_MESSAGE };
+
+    const res = await gatewayChat([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: TRANSCRIBE_PROMPT },
+          { type: "input_audio", input_audio: { data: data.audioBase64, format: "mp3" } },
+        ],
+      },
+    ]);
+    if (!res.ok) return res;
+    return { ok: true, text: offsetTranscript(res.content, data.offsetSec) };
+  });
+
+/**
+ * Chọn `count` đoạn Highlight (1-10) từ transcript. Phải đăng nhập.
+ * Mỗi tài khoản dùng thử 1 lần: dấu "trial_used" ghi trước khi gọi AI, lỗi thì trả lại lượt.
  */
 export const generateHighlights = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator(z.object({ transcript: z.string().min(50).max(200_000) }))
+  .inputValidator(
+    z.object({
+      transcript: z.string().min(50).max(400_000),
+      count: z.number().int().min(1).max(10),
+      durationSec: z.number().positive().optional(),
+    }),
+  )
   .handler(async ({ data, context }): Promise<HighlightResult> => {
-    const apiKey = process.env["LOVABLE_API_KEY"];
-    if (!apiKey) {
-      return { ok: false, error: "Chưa cấu hình khóa AI (LOVABLE_API_KEY) cho máy chủ." };
-    }
+    const { gatewayChat, readTrial, writeTrial } = await import("./highlight.server");
 
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: found, error: readError } = await supabaseAdmin.auth.admin.getUserById(context.userId);
-    if (readError || !found.user) {
-      return { ok: false, error: "Không đọc được tài khoản. Thử đăng nhập lại." };
-    }
-    const meta = found.user.app_metadata ?? {};
-    if (meta["trial_used"] === true) {
-      return { ok: false, trialUsed: true, error: "Bạn đã dùng thử 1 lần. Hãy chọn gói để tiếp tục." };
-    }
+    const trial = await readTrial(context.userId);
+    if (!trial.ok) return { ok: false, error: "Không đọc được tài khoản. Thử đăng nhập lại." };
+    if (trial.used) return { ok: false, trialUsed: true, error: TRIAL_USED_MESSAGE };
 
-    // Đánh dấu trước khi gọi AI để không bấm nhiều lần cùng lúc; lỗi thì trả lại lượt.
-    const setTrial = (used: boolean) =>
-      supabaseAdmin.auth.admin.updateUserById(context.userId, {
-        app_metadata: { ...meta, trial_used: used },
-      });
-    const { error: markError } = await setTrial(true);
+    const { error: markError } = await writeTrial(context.userId, trial.meta, true);
     if (markError) return { ok: false, error: "Không ghi được lượt dùng thử. Thử lại sau." };
 
     const fail = async (error: string): Promise<HighlightResult> => {
-      await setTrial(false);
-      return { ok: false, error };
+      await writeTrial(context.userId, trial.meta, false);
+      return { ok: false, error: `${error} Lượt dùng thử vẫn còn.` };
     };
 
-    let response: Response;
-    try {
-      response = await fetch(GATEWAY_URL, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: process.env["HIGHLIGHT_MODEL"] ?? DEFAULT_MODEL,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: buildUserPrompt(data.transcript) },
-          ],
-        }),
-      });
-    } catch {
-      return fail("Không kết nối được tới dịch vụ AI. Lượt dùng thử vẫn còn, thử lại sau.");
-    }
-
-    if (response.status === 429) return fail("AI đang quá tải, lượt dùng thử vẫn còn. Thử lại sau ít phút.");
-    if (response.status === 402) return fail("Đã hết hạn mức AI.");
-    if (!response.ok) return fail(`Dịch vụ AI báo lỗi (${response.status}). Lượt dùng thử vẫn còn.`);
+    // Hỏi dư 2 đoạn để có chỗ loại đoạn không đạt, rồi giữ lại đúng số khách chọn.
+    const ask = Math.min(10, data.count + 2);
+    const res = await gatewayChat([
+      { role: "system", content: buildSystemPrompt(ask) },
+      { role: "user", content: buildUserPrompt(data.transcript, ask) },
+    ]);
+    if (!res.ok) return fail(res.error);
 
     try {
-      const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-      const content = body.choices?.[0]?.message?.content ?? "";
-      const highlights = parseHighlightResponse(content);
-      return { ok: true, highlights, warnings: validateHighlights(highlights) };
+      const all = parseHighlightResponse(res.content).filter(
+        (h) => h.endSec > h.startSec && (data.durationSec === undefined || h.endSec <= data.durationSec + 1),
+      );
+      if (all.length === 0) return fail("AI không chọn được đoạn nào.");
+      const highlights = pickTop(all, data.count);
+      return { ok: true, highlights, warnings: validateHighlights(highlights, data.durationSec, highlights.length) };
     } catch {
-      return fail("AI trả về kết quả sai định dạng. Lượt dùng thử vẫn còn, bấm thử lại.");
+      return fail("AI trả về kết quả sai định dạng.");
     }
   });

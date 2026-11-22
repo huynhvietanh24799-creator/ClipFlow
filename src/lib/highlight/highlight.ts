@@ -45,10 +45,10 @@ export function parseHighlightResponse(raw: string): Highlight[] {
 }
 
 /** Trả về danh sách lỗi (rỗng = đạt). Kiểm: đủ 10, độ dài, không chồng mốc, không vượt video. */
-export function validateHighlights(list: Highlight[], videoDurationSec?: number): string[] {
+export function validateHighlights(list: Highlight[], videoDurationSec?: number, count: number = HIGHLIGHT_COUNT): string[] {
   const errors: string[] = [];
-  if (list.length !== HIGHLIGHT_COUNT) {
-    errors.push(`Cần đúng ${HIGHLIGHT_COUNT} đoạn, đang có ${list.length}.`);
+  if (list.length !== count) {
+    errors.push(`Cần đúng ${count} đoạn, đang có ${list.length}.`);
   }
   list.forEach((h, i) => {
     const n = i + 1;
@@ -82,4 +82,25 @@ export function buildFfmpegCommands(inputPath: string, list: Highlight[], outDir
     const dur = (h.endSec - h.startSec).toFixed(2);
     return `ffmpeg -y -ss ${h.startSec} -i ${shellQuote(inputPath)} -t ${dur} -c:v libx264 -c:a aac ${shellQuote(name)}`;
   });
+}
+
+/** Giữ lại `count` đoạn điểm cao nhất, xếp theo thứ tự thời gian. */
+export function pickTop(list: Highlight[], count: number): Highlight[] {
+  return [...list]
+    .sort((a, b) => b.viralScore - a.viralScore)
+    .slice(0, count)
+    .sort((a, b) => a.startSec - b.startSec);
+}
+
+/** Lấy các dòng [MM:SS] từ lời AI gỡ băng và cộng thêm mốc bắt đầu của đoạn âm thanh. */
+export function offsetTranscript(text: string, offsetSec: number): string {
+  const lines: string[] = [];
+  for (const line of text.split("\n")) {
+    const m = line.trim().match(/^\[((?:\d+:)?\d{1,2}:\d{2})\]\s*(.*)$/);
+    if (!m) continue;
+    const sec = parseTimestamp(m[1]!);
+    if (sec === null || !m[2]) continue;
+    lines.push(`[${formatTimestamp(sec + offsetSec)}] ${m[2]}`);
+  }
+  return lines.join("\n");
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFfmpegCommands,
   formatTimestamp,
+  offsetTranscript,
+  pickTop,
   parseHighlightResponse,
   parseTimestamp,
   validateHighlights,
@@ -57,5 +59,20 @@ describe("highlight", () => {
     const cmds = buildFfmpegCommands("video gốc.mp4", ten);
     expect(cmds).toHaveLength(10);
     expect(cmds[0]).toContain("-ss 0 -i 'video gốc.mp4' -t 45.00");
+  });
+
+  it("cộng mốc bắt đầu của đoạn âm thanh vào transcript", () => {
+    const out = offsetTranscript("[00:05] xin chào\nrác\n[01:00] tạm biệt", 300);
+    expect(out).toBe("[05:05] xin chào\n[06:00] tạm biệt");
+  });
+
+  it("giữ đúng số đoạn điểm cao nhất, xếp theo thời gian", () => {
+    const list = ten.map((h, i) => ({ ...h, viralScore: i + 1 }));
+    const top = pickTop(list, 3);
+    expect(top.map((h) => h.viralScore)).toEqual([8, 9, 10]);
+  });
+
+  it("kiểm tra theo số đoạn khách chọn", () => {
+    expect(validateHighlights(ten.slice(0, 3), 2000, 3)).toEqual([]);
   });
 });
