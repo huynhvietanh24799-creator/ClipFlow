@@ -29,7 +29,7 @@ export const transcribeChunk = createServerFn({ method: "POST" })
     const { gatewayChat, readTrial } = await import("./highlight.server");
     const trial = await readTrial(context.userId);
     if (!trial.ok) return { ok: false, error: "Không đọc được tài khoản. Thử đăng nhập lại." };
-    if (trial.used) return { ok: false, trialUsed: true, error: TRIAL_USED_MESSAGE };
+    if (trial.used && !trial.unlimited) return { ok: false, trialUsed: true, error: TRIAL_USED_MESSAGE };
 
     const res = await gatewayChat([
       {
@@ -64,12 +64,16 @@ export const generateHighlights = createServerFn({ method: "POST" })
 
     const trial = await readTrial(context.userId);
     if (!trial.ok) return { ok: false, error: "Không đọc được tài khoản. Thử đăng nhập lại." };
-    if (trial.used) return { ok: false, trialUsed: true, error: TRIAL_USED_MESSAGE };
+    if (trial.used && !trial.unlimited) return { ok: false, trialUsed: true, error: TRIAL_USED_MESSAGE };
 
-    const { error: markError } = await writeTrial(context.userId, trial.meta, true);
-    if (markError) return { ok: false, error: "Không ghi được lượt dùng thử. Thử lại sau." };
+    // Tài khoản không giới hạn thì không ghi và không trừ lượt.
+    if (!trial.unlimited) {
+      const { error: markError } = await writeTrial(context.userId, trial.meta, true);
+      if (markError) return { ok: false, error: "Không ghi được lượt dùng thử. Thử lại sau." };
+    }
 
     const fail = async (error: string): Promise<HighlightResult> => {
+      if (trial.unlimited) return { ok: false, error };
       await writeTrial(context.userId, trial.meta, false);
       return { ok: false, error: `${error} Lượt dùng thử vẫn còn.` };
     };

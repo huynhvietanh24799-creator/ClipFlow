@@ -35,7 +35,15 @@ export async function readTrial(userId: string) {
   const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
   if (error || !data.user) return { ok: false as const };
   const meta = data.user.app_metadata ?? {};
-  return { ok: true as const, meta, used: meta["trial_used"] === true };
+  // Tài khoản được cấp dùng không giới hạn (để thử web): email nằm trong biến môi trường
+  // UNLIMITED_EMAILS (cách nhau bằng dấu phẩy) và phải đã xác nhận email.
+  const allowed = (process.env["UNLIMITED_EMAILS"] ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const email = data.user.email?.toLowerCase();
+  const unlimited = !!email && !!data.user.email_confirmed_at && allowed.includes(email);
+  return { ok: true as const, meta, used: meta["trial_used"] === true, unlimited };
 }
 
 export async function writeTrial(userId: string, meta: Record<string, unknown>, used: boolean) {

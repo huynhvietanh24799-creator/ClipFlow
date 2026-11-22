@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { buildFfmpegCommands, formatTimestamp, parseTimestamp, type Highlight } from "@/lib/highlight/highlight";
+import type { AspectRatio } from "@/lib/highlight/clip-tools";
 import { generateHighlights, transcribeChunk } from "@/lib/highlight/highlight.functions";
 
 export const Route = createFileRoute("/highlight")({
@@ -29,6 +30,12 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_DURATION_SEC = 2 * 60 * 60;
 
 type Clip = { url: string; name: string };
+
+const RATIOS: { value: AspectRatio; label: string; css?: string }[] = [
+  { value: "original", label: "Giữ khung gốc (cắt nhanh)" },
+  { value: "16:9", label: "16:9 ngang (YouTube)", css: "16 / 9" },
+  { value: "9:16", label: "9:16 dọc (TikTok, Reels)", css: "9 / 16" },
+];
 
 const DURATION_PRESETS = [
   { label: "15–30 giây", minSec: 15, maxSec: 30 },
@@ -64,6 +71,7 @@ function HighlightPage() {
   const [file, setFile] = useState<File | null>(null);
   const [count, setCount] = useState(5);
   const [presetIdx, setPresetIdx] = useState(1);
+  const [ratio, setRatio] = useState<AspectRatio>("original");
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
   const [busy, setBusy] = useState(false);
@@ -99,6 +107,15 @@ function HighlightPage() {
     // Giải phóng bộ nhớ các clip cũ khi rời trang.
     return () => Object.values(clips).forEach((c) => URL.revokeObjectURL(c.url));
   }, [clips]);
+
+  function changeRatio(r: AspectRatio) {
+    setRatio(r);
+    // Đổi tỉ lệ thì clip đã cắt không còn đúng: bỏ để cắt lại.
+    setClips((prev) => {
+      Object.values(prev).forEach((c) => URL.revokeObjectURL(c.url));
+      return {};
+    });
+  }
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -204,9 +221,12 @@ function HighlightPage() {
       const next = { ...clips };
       for (const [n, i] of order.entries()) {
         const h = highlights[i]!;
-        setStatus(`Đang cắt video ${n + 1}/${order.length}...`);
+        const label = `Đang cắt video ${n + 1}/${order.length}`;
+        setStatus(`${label}...`);
         if (next[i]) continue;
-        const blob = await tools.cutClip(inputPath.current, h.startSec, h.endSec);
+        const blob = await tools.cutClip(inputPath.current, h.startSec, h.endSec, ratio, (f) =>
+          setStatus(`${label} (${Math.round(f * 100)}%)...`),
+        );
         next[i] = { url: URL.createObjectURL(blob), name: `highlight-${String(i + 1).padStart(2, "0")}.mp4` };
         setClips({ ...next });
       }
@@ -348,6 +368,28 @@ function HighlightPage() {
             ))}
           </div>
         </div>
+        <div>
+          <span className="mb-2 block text-sm font-medium">Tỉ lệ khung hình video cắt ra</span>
+          <div className="flex flex-wrap gap-2">
+            {RATIOS.map((r) => (
+              <Button
+                key={r.value}
+                type="button"
+                size="sm"
+                variant={r.value === ratio ? "default" : "outline"}
+                disabled={busy}
+                onClick={() => changeRatio(r.value)}
+              >
+                {r.label}
+              </Button>
+            ))}
+          </div>
+          {ratio !== "original" ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Đổi tỉ lệ phải nén lại video nên cắt chậm hơn (khoảng vài phút cho mỗi video). Khung hình được cắt giữa.
+            </p>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={analyzeVideo} disabled={!file || busy || trialUsed}>
             {busy && status ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
@@ -452,9 +494,12 @@ function HighlightPage() {
                   src={`${srcUrl}#t=${h.startSec},${h.endSec}`}
                   controls
                   preload="metadata"
-                  className="max-h-72 rounded-md bg-black"
+                  className="max-h-72 rounded-md bg-black object-cover"
+                  style={ratio === "original" ? undefined : { aspectRatio: RATIOS.find((r) => r.value === ratio)?.css }}
                 />
-                <p className="text-xs text-muted-foreground">Xem trước đoạn trong video gốc, trước khi cắt.</p>
+                <p className="text-xs text-muted-foreground">
+                  Xem trước đoạn trong video gốc{ratio === "original" ? "" : ` (khung ${ratio} như khi cắt)`}.
+                </p>
               </div>
             ) : null}
             {clips[i] ? (

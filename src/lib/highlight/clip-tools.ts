@@ -93,14 +93,43 @@ export async function forEachAudioChunk(
   }
 }
 
-/** Cắt 1 clip bằng cách sao chép luồng (rất nhanh, không nén lại). Điểm bắt đầu có thể lệch vài giây theo khung chính. */
-export async function cutClip(inputPath: string, startSec: number, endSec: number): Promise<Blob> {
+export type AspectRatio = "original" | "16:9" | "9:16";
+
+// Cắt giữa khung theo tỉ lệ rồi đưa về cỡ chuẩn (đã là số chẵn).
+const RATIO_FILTER: Record<Exclude<AspectRatio, "original">, string> = {
+  "16:9": "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)',scale=1280:720,setsar=1",
+  "9:16": "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)',scale=720:1280,setsar=1",
+};
+
+/**
+ * Cắt 1 clip. Giữ khung gốc: sao chép luồng (rất nhanh, điểm bắt đầu có thể lệch vài giây).
+ * Đổi tỉ lệ 16:9 / 9:16: phải nén lại video nên chậm hơn nhưng cắt đúng mốc.
+ */
+export async function cutClip(
+  inputPath: string,
+  startSec: number,
+  endSec: number,
+  ratio: AspectRatio = "original",
+  onProgress?: (fraction: number) => void,
+): Promise<Blob> {
   const ffmpeg = await getFfmpeg();
   const out = `clip-${Math.round(startSec)}.mp4`;
-  await run(ffmpeg, [
-    "-ss", String(startSec), "-i", inputPath, "-t", (endSec - startSec).toFixed(2),
-    "-c", "copy", "-avoid_negative_ts", "make_zero", out,
-  ]);
+  const base = ["-ss", String(startSec), "-i", inputPath, "-t", (endSec - startSec).toFixed(2)];
+  const codec =
+    ratio === "original"
+      ? ["-c", "copy", "-avoid_negative_ts", "make_zero"]
+      : [
+          "-vf", RATIO_FILTER[ratio],
+          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26", "-pix_fmt", "yuv420p",
+          "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+        ];
+  const handler = ({ progress }: { progress: number }) => onProgress?.(Math.min(1, Math.max(0, progress)));
+  ffmpeg.on("progress", handler);
+  try {
+    await run(ffmpeg, [...base, ...codec, out]);
+  } finally {
+    ffmpeg.off("progress", handler);
+  }
   const data = (await ffmpeg.readFile(out)) as Uint8Array;
   await ffmpeg.deleteFile(out);
   return new Blob([new Uint8Array(data)], { type: "video/mp4" });
