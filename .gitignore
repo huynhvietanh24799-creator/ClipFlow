@@ -30,3 +30,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Cầu nối tải video trên máy cá nhân
+bridge/bin/
+bridge/tmp/
+bridge/bridge.env

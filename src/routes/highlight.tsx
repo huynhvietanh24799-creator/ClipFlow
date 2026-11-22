@@ -39,7 +39,6 @@ const MAX_DURATION_SEC = 2 * 60 * 60;
 type Clip = { url: string; name: string };
 
 const RATIOS: { value: AspectRatio; label: string; css?: string }[] = [
-  { value: "original", label: "Giữ khung gốc (cắt nhanh)" },
   { value: "16:9", label: "16:9 ngang (YouTube)", css: "16 / 9" },
   { value: "9:16", label: "9:16 dọc (TikTok, Reels)", css: "9 / 16" },
 ];
@@ -78,10 +77,13 @@ function HighlightPage() {
   const [file, setFile] = useState<File | null>(null);
   const [count, setCount] = useState(5);
   const [presetIdx, setPresetIdx] = useState(1);
-  const [ratio, setRatio] = useState<AspectRatio>("original");
+  const [ratio, setRatio] = useState<AspectRatio>("16:9");
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
   const [videoUrl, setVideoUrl] = useState("");
+  const [bridgeUrl, setBridgeUrl] = useState("");
+  const [bridgeKey, setBridgeKey] = useState("");
+  const [owned, setOwned] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +102,15 @@ function HighlightPage() {
       else setChecking(false);
     });
   }, [navigate]);
+
+  useEffect(() => {
+    try {
+      setBridgeUrl(localStorage.getItem("clipflow.bridgeUrl") ?? "");
+      setBridgeKey(localStorage.getItem("clipflow.bridgeKey") ?? "");
+    } catch {
+      // Trình duyệt chặn lưu trữ: bỏ qua, khách nhập lại mỗi lần.
+    }
+  }, []);
 
   useEffect(() => {
     if (!file) {
@@ -157,20 +168,37 @@ function HighlightPage() {
       setError("Link chưa đúng. Link phải bắt đầu bằng http:// hoặc https://.");
       return;
     }
-    if (isPlatformLink(url)) {
+    const platform = isPlatformLink(url);
+    const bridge = bridgeUrl.trim().replace(/\/+$/, "");
+    if (platform && (!bridge || !bridgeKey.trim())) {
       setError(
-        "Link của YouTube, TikTok, Facebook... là trang xem video, web không tải video về được. " +
-          "Hãy tải file video về máy (từ kênh của bạn hoặc nơi được phép) rồi bấm Chọn file ở trên. " +
-          "Link file video trực tiếp (.mp4, .mov, .webm) thì dùng được.",
+        "Link YouTube, TikTok, Facebook... cần cầu nối tải video chạy trên máy của bạn. " +
+          "Mở mục \"Link YouTube, TikTok, Facebook\" bên dưới để cài đặt, hoặc tải file video về máy rồi bấm Chọn file.",
       );
+      return;
+    }
+    if (platform && !owned) {
+      setError("Hãy tick ô xác nhận bạn là chủ video hoặc có quyền sử dụng video này.");
       return;
     }
     setBusy(true);
     try {
       const tools = await import("@/lib/highlight/clip-tools");
       setStatus("Đang tải video từ link...");
-      const f = await tools.loadVideoFromUrl(url, MAX_FILE_BYTES, (p) =>
-        setStatus(p === null ? "Đang tải video từ link..." : `Đang tải video từ link: ${Math.round(p * 100)}%`),
+      if (platform) {
+        try {
+          localStorage.setItem("clipflow.bridgeUrl", bridge);
+          localStorage.setItem("clipflow.bridgeKey", bridgeKey.trim());
+        } catch {
+          // Không lưu được thì thôi.
+        }
+        setStatus("Cầu nối đang tải video về máy (có thể mất vài phút)...");
+      }
+      const f = await tools.loadVideoFromUrl(
+        platform ? `${bridge}/fetch?url=${encodeURIComponent(url)}` : url,
+        MAX_FILE_BYTES,
+        (p) => setStatus(p === null ? "Đang tải video từ link..." : `Đang tải video từ link: ${Math.round(p * 100)}%`),
+        platform ? { headers: { "X-Bridge-Key": bridgeKey.trim() }, fileName: "video-tu-link.mp4" } : undefined,
       );
       onPickFile(f);
       toast.success("Đã tải video. Bấm Phân tích video.");
@@ -393,9 +421,24 @@ function HighlightPage() {
               Tải từ link
             </Button>
           </div>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Link YouTube, TikTok, Facebook... là trang xem video nên chưa tải trực tiếp được.
-          </p>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs text-muted-foreground">
+              Link YouTube, TikTok, Facebook... (cần cầu nối chạy trên máy của bạn)
+            </summary>
+            <div className="mt-2 grid gap-2 rounded-md border p-3 text-xs text-muted-foreground">
+              <p>
+                Web không tải được video từ các trang này. Cầu nối là một chương trình nhỏ chạy trên máy bạn: mở Terminal,
+                chạy <code>bash bridge/start.sh</code> trong thư mục dự án, rồi dán địa chỉ https://...trycloudflare.com và
+                khóa mà chương trình in ra vào đây.
+              </p>
+              <Input placeholder="Địa chỉ cầu nối (https://...trycloudflare.com)" value={bridgeUrl} onChange={(e) => setBridgeUrl(e.target.value)} />
+              <Input type="password" placeholder="Khóa cầu nối" value={bridgeKey} onChange={(e) => setBridgeKey(e.target.value)} />
+              <label className="flex items-start gap-2">
+                <input type="checkbox" className="mt-0.5" checked={owned} onChange={(e) => setOwned(e.target.checked)} />
+                <span>Tôi là chủ video này hoặc có quyền sử dụng, và tuân thủ điều khoản của nền tảng.</span>
+              </label>
+            </div>
+          </details>
         </div>
         <div>
           <label className="mb-2 block text-sm font-medium" htmlFor="count">
@@ -445,11 +488,9 @@ function HighlightPage() {
               </Button>
             ))}
           </div>
-          {ratio !== "original" ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Đổi tỉ lệ phải nén lại video nên cắt chậm hơn (khoảng vài phút cho mỗi video). Khung hình được cắt giữa.
-            </p>
-          ) : null}
+          <p className="mt-2 text-xs text-muted-foreground">
+            Video được nén lại theo tỉ lệ đã chọn nên cắt mất khoảng vài phút cho mỗi video. Khung hình được cắt giữa.
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={analyzeVideo} disabled={!file || busy || trialUsed}>
@@ -503,9 +544,6 @@ function HighlightPage() {
               <Download className="mr-2 h-4 w-4" /> Tải {readyClips} video
             </Button>
           ) : null}
-          <span className="text-xs text-muted-foreground">
-            Cắt nhanh bằng sao chép luồng, điểm bắt đầu có thể lệch vài giây.
-          </span>
         </div>
       ) : null}
 
@@ -556,10 +594,10 @@ function HighlightPage() {
                   controls
                   preload="metadata"
                   className="max-h-72 rounded-md bg-black object-cover"
-                  style={ratio === "original" ? undefined : { aspectRatio: RATIOS.find((r) => r.value === ratio)?.css }}
+                  style={{ aspectRatio: RATIOS.find((r) => r.value === ratio)?.css }}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Xem trước đoạn trong video gốc{ratio === "original" ? "" : ` (khung ${ratio} như khi cắt)`}.
+                  Xem trước đoạn trong video gốc (khung {ratio} như khi cắt).
                 </p>
               </div>
             ) : null}

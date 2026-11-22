@@ -142,18 +142,23 @@ export async function loadVideoFromUrl(
   url: string,
   maxBytes: number,
   onProgress?: (fraction: number | null) => void,
+  options?: { headers?: Record<string, string>; fileName?: string },
 ): Promise<File> {
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, options?.headers ? { headers: options.headers } : undefined);
   } catch {
     throw new Error(
       "Không tải được video từ link này (máy chủ chứa video không cho phép web đọc trực tiếp). Hãy tải file về máy rồi chọn file.",
     );
   }
-  if (!res.ok) throw new Error(`Link báo lỗi (${res.status}). Kiểm tra lại link.`);
+  if (!res.ok) {
+    // Cầu nối trả lời bằng câu tiếng Việt dễ hiểu; link thường thì chỉ báo mã lỗi.
+    const detail = options?.headers ? (await res.text().catch(() => "")).slice(0, 200) : "";
+    throw new Error(detail || `Link báo lỗi (${res.status}). Kiểm tra lại link.`);
+  }
   const type = res.headers.get("content-type") ?? "";
-  if (!type.startsWith("video/") && !VIDEO_EXT.test(url)) {
+  if (!type.startsWith("video/") && !VIDEO_EXT.test(url) && !options?.fileName) {
     throw new Error("Link này không phải file video trực tiếp (.mp4, .mov, .webm...).");
   }
   const total = Number(res.headers.get("content-length")) || 0;
@@ -174,7 +179,7 @@ export async function loadVideoFromUrl(
     }
     onProgress?.(total ? received / total : null);
   }
-  const rawName = decodeURIComponent(new URL(url).pathname.split("/").pop() || "video");
+  const rawName = options?.fileName ?? decodeURIComponent(new URL(url).pathname.split("/").pop() || "video");
   const name = VIDEO_EXT.test(rawName) ? rawName : `${rawName}.mp4`;
   return new File(parts, name, { type: type.startsWith("video/") ? type : "video/mp4" });
 }
