@@ -117,3 +117,27 @@ export function inRange(h: Highlight, range: DurationRange): boolean {
   const len = h.endSec - h.startSec;
   return len >= range.minSec * 0.9 && len <= range.maxSec * 1.1;
 }
+
+const PLATFORM_HOSTS = [
+  "youtube.com", "youtu.be", "tiktok.com", "facebook.com", "fb.watch", "instagram.com",
+  "vimeo.com", "x.com", "twitter.com", "drive.google.com", "dropbox.com",
+];
+
+/** Link của nền tảng (YouTube, TikTok...): là trang web, không phải file video tải trực tiếp được. */
+export function isPlatformLink(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return PLATFORM_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+}
+
+export function isHttpUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}

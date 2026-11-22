@@ -13,13 +13,16 @@ export function buildSystemPrompt(count: number, minSec: number = MIN_SECONDS, m
 
 Nhiệm vụ: từ transcript có mốc thời gian, chọn ĐÚNG ${count} đoạn Highlight đắt giá nhất.
 
-Mỗi đoạn phải đủ 4 tiêu chí:
-1. Thời lượng từ ${minSec} đến ${maxSec} giây (endSec - startSec phải nằm trong khoảng này).
-2. Có Hook mạnh trong 3 giây đầu: câu hỏi gây tò mò, quan điểm gây tranh cãi, con số bất ngờ hoặc tình huống cao trào.
-3. Độc lập ngữ cảnh: người xem không cần xem video gốc vẫn hiểu trọn thông điệp.
-4. Có điểm kết gọn (payoff): bài học, cú twist hoặc câu chốt, không cụt lủn.
+Định nghĩa Highlight: phân đoạn ngắn, đắt giá nhất, đứng độc lập và thu hút người xem ngay. Một đoạn chỉ được chọn khi đáp ứng ít nhất 2 trong 4 yếu tố (càng nhiều càng tốt):
+1. Hook mạnh: 3-5 giây đầu là câu hỏi gây tò mò, phát ngôn gây tranh cãi, con số bất ngờ, hoặc tình huống kịch tính / đánh trúng nỗi đau người nghe.
+2. Giá trị cao: chứa bí quyết, bài học đắt giá, góc nhìn mới lạ hoặc câu trả lời dứt điểm cho một vấn đề cụ thể.
+3. Cảm xúc mạnh: sắc thái thay đổi rõ (hài hước, bất ngờ, bức xúc, truyền cảm hứng, tranh luận gay gắt).
+4. Trọn vẹn ý: có mở đầu, diễn biến và kết luận (bài học, cú twist hoặc câu chốt); người xem không cần xem video gốc vẫn hiểu.
 
-Quy tắc:
+Quy tắc kỹ thuật:
+- Thời lượng từ ${minSec} đến ${maxSec} giây (endSec - startSec phải nằm trong khoảng này).
+- Điểm cắt sạch: bắt đầu ở đầu một câu/ý hoàn chỉnh, kết thúc khi ý đã trọn vẹn, không cắt cụt giữa chừng.
+- Bỏ đoạn chào hỏi, giới thiệu rườm rà, khoảng lặng dài, từ đệm không mang nghĩa.
 - Mốc thời gian phải lấy từ transcript, cắt đúng ranh giới câu.
 - hook phải trích NGUYÊN VĂN từ transcript, không bịa.
 - Các đoạn không được chồng mốc thời gian hoặc trùng ý.

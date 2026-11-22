@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildFfmpegCommands,
   formatTimestamp,
+  isHttpUrl,
+  isPlatformLink,
   offsetTranscript,
   pickTop,
   parseHighlightResponse,
@@ -74,5 +76,13 @@ describe("highlight", () => {
 
   it("kiểm tra theo số đoạn khách chọn", () => {
     expect(validateHighlights(ten.slice(0, 3), 2000, 3)).toEqual([]);
+  });
+
+  it("nhận diện link nền tảng và link http", () => {
+    expect(isPlatformLink("https://www.youtube.com/watch?v=abc")).toBe(true);
+    expect(isPlatformLink("https://youtu.be/abc")).toBe(true);
+    expect(isPlatformLink("https://cdn.example.com/video.mp4")).toBe(false);
+    expect(isHttpUrl("ftp://a.com/x.mp4")).toBe(false);
+    expect(isHttpUrl("https://a.com/x.mp4")).toBe(true);
   });
 });

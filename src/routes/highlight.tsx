@@ -8,7 +8,14 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
-import { buildFfmpegCommands, formatTimestamp, parseTimestamp, type Highlight } from "@/lib/highlight/highlight";
+import {
+  buildFfmpegCommands,
+  formatTimestamp,
+  isHttpUrl,
+  isPlatformLink,
+  parseTimestamp,
+  type Highlight,
+} from "@/lib/highlight/highlight";
 import type { AspectRatio } from "@/lib/highlight/clip-tools";
 import { generateHighlights, transcribeChunk } from "@/lib/highlight/highlight.functions";
 
@@ -74,6 +81,7 @@ function HighlightPage() {
   const [ratio, setRatio] = useState<AspectRatio>("original");
   const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +148,38 @@ function HighlightPage() {
       return;
     }
     setFile(f);
+  }
+
+  async function loadFromUrl() {
+    const url = videoUrl.trim();
+    setError(null);
+    if (!isHttpUrl(url)) {
+      setError("Link chưa đúng. Link phải bắt đầu bằng http:// hoặc https://.");
+      return;
+    }
+    if (isPlatformLink(url)) {
+      setError(
+        "Link của YouTube, TikTok, Facebook... là trang xem video, web không tải video về được. " +
+          "Hãy tải file video về máy (từ kênh của bạn hoặc nơi được phép) rồi bấm Chọn file ở trên. " +
+          "Link file video trực tiếp (.mp4, .mov, .webm) thì dùng được.",
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const tools = await import("@/lib/highlight/clip-tools");
+      setStatus("Đang tải video từ link...");
+      const f = await tools.loadVideoFromUrl(url, MAX_FILE_BYTES, (p) =>
+        setStatus(p === null ? "Đang tải video từ link..." : `Đang tải video từ link: ${Math.round(p * 100)}%`),
+      );
+      onPickFile(f);
+      toast.success("Đã tải video. Bấm Phân tích video.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Không tải được video từ link.");
+    } finally {
+      setBusy(false);
+      setStatus(null);
+    }
   }
 
   async function pickHighlights(text: string, durationSec: number | undefined) {
@@ -335,6 +375,27 @@ function HighlightPage() {
             onChange={(e) => onPickFile(e.target.files?.[0] ?? null)}
           />
           {file ? <p className="mt-1 text-xs text-muted-foreground">{file.name}</p> : null}
+        </div>
+        <div>
+          <label className="mb-2 block text-sm font-medium" htmlFor="video-url">
+            Hoặc dán link file video trực tiếp (.mp4, .mov, .webm)
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id="video-url"
+              type="url"
+              placeholder="https://.../video.mp4"
+              value={videoUrl}
+              disabled={busy}
+              onChange={(e) => setVideoUrl(e.target.value)}
+            />
+            <Button type="button" variant="outline" disabled={busy || !videoUrl.trim()} onClick={loadFromUrl}>
+              Tải từ link
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Link YouTube, TikTok, Facebook... là trang xem video nên chưa tải trực tiếp được.
+          </p>
         </div>
         <div>
           <label className="mb-2 block text-sm font-medium" htmlFor="count">

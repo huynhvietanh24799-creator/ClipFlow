@@ -134,3 +134,47 @@ export async function cutClip(
   await ffmpeg.deleteFile(out);
   return new Blob([new Uint8Array(data)], { type: "video/mp4" });
 }
+
+const VIDEO_EXT = /\.(mp4|mov|m4v|webm|mkv|avi)(\?|#|$)/i;
+
+/** Tải video từ link trực tiếp ngay trong trình duyệt của khách. Lỗi nếu máy chủ video không cho phép (CORS). */
+export async function loadVideoFromUrl(
+  url: string,
+  maxBytes: number,
+  onProgress?: (fraction: number | null) => void,
+): Promise<File> {
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new Error(
+      "Không tải được video từ link này (máy chủ chứa video không cho phép web đọc trực tiếp). Hãy tải file về máy rồi chọn file.",
+    );
+  }
+  if (!res.ok) throw new Error(`Link báo lỗi (${res.status}). Kiểm tra lại link.`);
+  const type = res.headers.get("content-type") ?? "";
+  if (!type.startsWith("video/") && !VIDEO_EXT.test(url)) {
+    throw new Error("Link này không phải file video trực tiếp (.mp4, .mov, .webm...).");
+  }
+  const total = Number(res.headers.get("content-length")) || 0;
+  if (total > maxBytes) throw new Error("Video lớn hơn 2GB. Hãy chọn video nhỏ hơn.");
+  if (!res.body) throw new Error("Trình duyệt không hỗ trợ tải video từ link.");
+
+  const reader = res.body.getReader();
+  const parts: BlobPart[] = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    received += value.length;
+    if (received > maxBytes) {
+      await reader.cancel();
+      throw new Error("Video lớn hơn 2GB. Hãy chọn video nhỏ hơn.");
+    }
+    onProgress?.(total ? received / total : null);
+  }
+  const rawName = decodeURIComponent(new URL(url).pathname.split("/").pop() || "video");
+  const name = VIDEO_EXT.test(rawName) ? rawName : `${rawName}.mp4`;
+  return new File(parts, name, { type: type.startsWith("video/") ? type : "video/mp4" });
+}
