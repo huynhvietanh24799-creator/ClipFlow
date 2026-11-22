@@ -8,13 +8,13 @@ export const HIGHLIGHT_COUNT = 10;
 export const MIN_SECONDS = 30;
 export const MAX_SECONDS = 90;
 
-export function buildSystemPrompt(count: number): string {
+export function buildSystemPrompt(count: number, minSec: number = MIN_SECONDS, maxSec: number = MAX_SECONDS): string {
   return `Bạn là Chuyên gia Biên tập Video ngắn (Short-form Video Strategist), chuyên chuyển video dài (Podcast, YouTube, Livestream) thành video Highlight cho TikTok, Reels, YouTube Shorts.
 
 Nhiệm vụ: từ transcript có mốc thời gian, chọn ĐÚNG ${count} đoạn Highlight đắt giá nhất.
 
 Mỗi đoạn phải đủ 4 tiêu chí:
-1. Thời lượng ${MIN_SECONDS}-60 giây (tối đa ${MAX_SECONDS} giây nếu câu chuyện cực cuốn).
+1. Thời lượng từ ${minSec} đến ${maxSec} giây (endSec - startSec phải nằm trong khoảng này).
 2. Có Hook mạnh trong 3 giây đầu: câu hỏi gây tò mò, quan điểm gây tranh cãi, con số bất ngờ hoặc tình huống cao trào.
 3. Độc lập ngữ cảnh: người xem không cần xem video gốc vẫn hiểu trọn thông điệp.
 4. Có điểm kết gọn (payoff): bài học, cú twist hoặc câu chốt, không cụt lủn.

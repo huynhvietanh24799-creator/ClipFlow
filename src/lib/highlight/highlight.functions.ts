@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { offsetTranscript, parseHighlightResponse, pickTop, validateHighlights, type Highlight } from "./highlight";
+import { inRange, offsetTranscript, parseHighlightResponse, pickTop, validateHighlights, type Highlight } from "./highlight";
 import { TRANSCRIBE_PROMPT, buildSystemPrompt, buildUserPrompt } from "./prompt";
 
 export type HighlightResult =
@@ -55,6 +55,8 @@ export const generateHighlights = createServerFn({ method: "POST" })
       transcript: z.string().min(50).max(400_000),
       count: z.number().int().min(1).max(10),
       durationSec: z.number().positive().optional(),
+      minSec: z.number().int().min(10).max(170).default(30),
+      maxSec: z.number().int().min(20).max(180).default(90),
     }),
   )
   .handler(async ({ data, context }): Promise<HighlightResult> => {
@@ -75,7 +77,7 @@ export const generateHighlights = createServerFn({ method: "POST" })
     // Hỏi dư 2 đoạn để có chỗ loại đoạn không đạt, rồi giữ lại đúng số khách chọn.
     const ask = Math.min(10, data.count + 2);
     const res = await gatewayChat([
-      { role: "system", content: buildSystemPrompt(ask) },
+      { role: "system", content: buildSystemPrompt(ask, data.minSec, data.maxSec) },
       { role: "user", content: buildUserPrompt(data.transcript, ask) },
     ]);
     if (!res.ok) return fail(res.error);
@@ -85,8 +87,11 @@ export const generateHighlights = createServerFn({ method: "POST" })
         (h) => h.endSec > h.startSec && (data.durationSec === undefined || h.endSec <= data.durationSec + 1),
       );
       if (all.length === 0) return fail("AI không chọn được đoạn nào.");
-      const highlights = pickTop(all, data.count);
-      return { ok: true, highlights, warnings: validateHighlights(highlights, data.durationSec, highlights.length) };
+      const range = { minSec: data.minSec, maxSec: data.maxSec };
+      // Ưu tiên đoạn đúng độ dài khách chọn; thiếu thì lấy thêm đoạn khác.
+      const fits = all.filter((h) => inRange(h, range));
+      const highlights = pickTop(fits.length >= data.count ? fits : all, data.count);
+      return { ok: true, highlights, warnings: validateHighlights(highlights, data.durationSec, highlights.length, range) };
     } catch {
       return fail("AI trả về kết quả sai định dạng.");
     }

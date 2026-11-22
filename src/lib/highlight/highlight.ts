@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { HIGHLIGHT_COUNT, MAX_SECONDS, MIN_SECONDS } from "./prompt";
 
+export type DurationRange = { minSec: number; maxSec: number };
+
 export const highlightSchema = z.object({
   title: z.string().min(1),
   startSec: z.number().nonnegative(),
@@ -45,7 +47,12 @@ export function parseHighlightResponse(raw: string): Highlight[] {
 }
 
 /** Trả về danh sách lỗi (rỗng = đạt). Kiểm: đủ 10, độ dài, không chồng mốc, không vượt video. */
-export function validateHighlights(list: Highlight[], videoDurationSec?: number, count: number = HIGHLIGHT_COUNT): string[] {
+export function validateHighlights(
+  list: Highlight[],
+  videoDurationSec?: number,
+  count: number = HIGHLIGHT_COUNT,
+  range: DurationRange = { minSec: MIN_SECONDS, maxSec: MAX_SECONDS },
+): string[] {
   const errors: string[] = [];
   if (list.length !== count) {
     errors.push(`Cần đúng ${count} đoạn, đang có ${list.length}.`);
@@ -53,8 +60,8 @@ export function validateHighlights(list: Highlight[], videoDurationSec?: number,
   list.forEach((h, i) => {
     const n = i + 1;
     const len = h.endSec - h.startSec;
-    if (len < MIN_SECONDS || len > MAX_SECONDS) {
-      errors.push(`Đoạn ${n}: dài ${Math.round(len)}s, cần ${MIN_SECONDS}-${MAX_SECONDS}s.`);
+    if (len < range.minSec || len > range.maxSec) {
+      errors.push(`Đoạn ${n}: dài ${Math.round(len)}s, cần ${range.minSec}-${range.maxSec}s.`);
     }
     if (videoDurationSec !== undefined && h.endSec > videoDurationSec) {
       errors.push(`Đoạn ${n}: vượt quá độ dài video.`);
@@ -103,4 +110,10 @@ export function offsetTranscript(text: string, offsetSec: number): string {
     lines.push(`[${formatTimestamp(sec + offsetSec)}] ${m[2]}`);
   }
   return lines.join("\n");
+}
+
+/** Đoạn có độ dài trong khoảng (cho lệch 10%). */
+export function inRange(h: Highlight, range: DurationRange): boolean {
+  const len = h.endSec - h.startSec;
+  return len >= range.minSec * 0.9 && len <= range.maxSec * 1.1;
 }

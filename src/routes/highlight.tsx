@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
-import { buildFfmpegCommands, formatTimestamp, type Highlight } from "@/lib/highlight/highlight";
+import { buildFfmpegCommands, formatTimestamp, parseTimestamp, type Highlight } from "@/lib/highlight/highlight";
 import { generateHighlights, transcribeChunk } from "@/lib/highlight/highlight.functions";
 
 export const Route = createFileRoute("/highlight")({
@@ -30,6 +30,32 @@ const MAX_DURATION_SEC = 2 * 60 * 60;
 
 type Clip = { url: string; name: string };
 
+const DURATION_PRESETS = [
+  { label: "15–30 giây", minSec: 15, maxSec: 30 },
+  { label: "30–60 giây", minSec: 30, maxSec: 60 },
+  { label: "60–90 giây", minSec: 60, maxSec: 90 },
+  { label: "90–120 giây", minSec: 90, maxSec: 120 },
+];
+
+/** Ô nhập mốc MM:SS; chỉ áp dụng khi rời ô và giá trị hợp lệ. */
+function TimeInput({ value, onCommit, disabled }: { value: number; onCommit: (sec: number) => void; disabled?: boolean }) {
+  const [text, setText] = useState(formatTimestamp(value));
+  useEffect(() => setText(formatTimestamp(value)), [value]);
+  return (
+    <Input
+      className="h-8 w-24 text-center"
+      value={text}
+      disabled={disabled}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        const sec = parseTimestamp(text);
+        if (sec === null) setText(formatTimestamp(value));
+        else onCommit(sec);
+      }}
+    />
+  );
+}
+
 function HighlightPage() {
   const navigate = useNavigate();
   const [checking, setChecking] = useState(true);
@@ -37,6 +63,8 @@ function HighlightPage() {
 
   const [file, setFile] = useState<File | null>(null);
   const [count, setCount] = useState(5);
+  const [presetIdx, setPresetIdx] = useState(1);
+  const [srcUrl, setSrcUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -56,6 +84,16 @@ function HighlightPage() {
       else setChecking(false);
     });
   }, [navigate]);
+
+  useEffect(() => {
+    if (!file) {
+      setSrcUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setSrcUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   useEffect(() => {
     // Giải phóng bộ nhớ các clip cũ khi rời trang.
@@ -89,7 +127,8 @@ function HighlightPage() {
 
   async function pickHighlights(text: string, durationSec: number | undefined) {
     setStatus("AI đang chọn đoạn Highlight...");
-    const res = await generateHighlights({ data: { transcript: text, count, durationSec } });
+    const { minSec, maxSec } = DURATION_PRESETS[presetIdx]!;
+    const res = await generateHighlights({ data: { transcript: text, count, durationSec, minSec, maxSec } });
     if (!res.ok) {
       setError(res.error);
       if (res.trialUsed) setTrialUsed(true);
@@ -192,6 +231,30 @@ function HighlightPage() {
       });
   }
 
+  function updateTime(i: number, field: "startSec" | "endSec", sec: number) {
+    const h = highlights[i]!;
+    const next = { ...h, [field]: sec };
+    if (next.endSec - next.startSec < 5) {
+      toast.error("Đoạn cắt phải dài ít nhất 5 giây.");
+      return;
+    }
+    if (duration !== undefined && next.endSec > duration) {
+      toast.error("Mốc kết thúc vượt quá độ dài video.");
+      return;
+    }
+    if (next.startSec === h.startSec && next.endSec === h.endSec) return;
+    setHighlights((prev) => prev.map((x, k) => (k === i ? next : x)));
+    // Mốc đổi thì clip đã cắt không còn đúng: bỏ để cắt lại.
+    setClips((prev) => {
+      const old = prev[i];
+      if (!old) return prev;
+      URL.revokeObjectURL(old.url);
+      const rest = { ...prev };
+      delete rest[i];
+      return rest;
+    });
+  }
+
   async function copy(text: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -267,6 +330,23 @@ function HighlightPage() {
             disabled={busy}
             onChange={(e) => setCount(Math.min(10, Math.max(1, Math.round(Number(e.target.value)) || 1)))}
           />
+        </div>
+        <div>
+          <span className="mb-2 block text-sm font-medium">Độ dài mỗi video</span>
+          <div className="flex flex-wrap gap-2">
+            {DURATION_PRESETS.map((p, i) => (
+              <Button
+                key={p.label}
+                type="button"
+                size="sm"
+                variant={i === presetIdx ? "default" : "outline"}
+                disabled={busy}
+                onClick={() => setPresetIdx(i)}
+              >
+                {p.label}
+              </Button>
+            ))}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button onClick={analyzeVideo} disabled={!file || busy || trialUsed}>
@@ -358,8 +438,28 @@ function HighlightPage() {
             <p className="mt-2 text-sm">
               {h.caption} {h.hashtags.join(" ")}
             </p>
+            {file && srcUrl ? (
+              <div className="mt-3 grid gap-2">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span>Cắt từ</span>
+                  <TimeInput value={h.startSec} disabled={busy} onCommit={(sec) => updateTime(i, "startSec", sec)} />
+                  <span>đến</span>
+                  <TimeInput value={h.endSec} disabled={busy} onCommit={(sec) => updateTime(i, "endSec", sec)} />
+                  <span className="text-muted-foreground">(MM:SS, sửa được)</span>
+                </div>
+                <video
+                  key={`${i}-${h.startSec}-${h.endSec}`}
+                  src={`${srcUrl}#t=${h.startSec},${h.endSec}`}
+                  controls
+                  preload="metadata"
+                  className="max-h-72 rounded-md bg-black"
+                />
+                <p className="text-xs text-muted-foreground">Xem trước đoạn trong video gốc, trước khi cắt.</p>
+              </div>
+            ) : null}
             {clips[i] ? (
               <div className="mt-3">
+                <p className="mb-1 text-sm font-medium">Video đã cắt</p>
                 <video src={clips[i].url} controls className="max-h-72 rounded-md" />
                 <Button asChild variant="outline" size="sm" className="mt-2">
                   <a href={clips[i].url} download={clips[i].name}>
